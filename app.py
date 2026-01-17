@@ -1,67 +1,91 @@
-from flask import Flask, request, jsonify
+import discord
 import json
 import hashlib
 import secrets
-from datetime import datetime
 import os
+from discord.ext import commands
+from datetime import datetime
+from flask import Flask, request, jsonify
+from threading import Thread
 
+# ========== DISCORD BOT ==========
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix='!', intents=intents)
+
+# Your Discord bot token
+DISCORD_TOKEN = os.environ.get('DISCORD_TOKEN', 'MTQyNzI4MTQ2OTg0NzUwMjg1OA.GvZNY0.Euoe6oB45R9w4-BXJRI23-ZjU7f3CtfsP8S5RY')
+
+# Channel storage
+players_channel = None
+sessions_channel = None
+data_channel = None
+
+@bot.event
+async def on_ready():
+    print(f'✅ Discord Bot {bot.user} is online!')
+    
+    # Find our server and channels
+    for guild in bot.guilds:
+        print(f"Found server: {guild.name}")
+        
+        for channel in guild.channels:
+            if hasattr(channel, 'name'):
+                if channel.name == 'players-db':
+                    global players_channel
+                    players_channel = channel
+                    print(f"✅ Found players-db channel")
+                
+                elif channel.name == 'sessions-db':
+                    global sessions_channel
+                    sessions_channel = channel
+                    print(f"✅ Found sessions-db channel")
+                
+                elif channel.name == 'player-data':
+                    global data_channel
+                    data_channel = channel
+                    print(f"✅ Found player-data channel")
+    
+    if not players_channel:
+        print("❌ ERROR: Could not find players-db channel!")
+    if not sessions_channel:
+        print("❌ ERROR: Could not find sessions-db channel!")
+    if not data_channel:
+        print("❌ ERROR: Could not find player-data channel!")
+    
+    print("🚀 Discord Bot ready for database operations!")
+
+# ========== FLASK API ==========
 app = Flask(__name__)
 
-# ========== SIMPLE IN-MEMORY DATABASE ==========
-users_db = []          # Store user accounts
-sessions_db = []       # Store login sessions
-players_db = []        # Store player game data
-
-# ========== HELPER FUNCTIONS ==========
-def find_user_by_email(email):
-    for user in users_db:
-        if user['email'] == email:
-            return user
-    return None
-
-def find_user_by_username(username):
-    for user in users_db:
-        if user['username'] == username:
-            return user
-    return None
-
-def find_user_by_id(user_id):
-    for user in users_db:
-        if user['user_id'] == user_id:
-            return user
-    return None
-
-def find_session_by_token(token):
-    for session in sessions_db:
-        if session['auth_token'] == token:
-            return session
-    return None
-
-def find_player_data(user_id):
-    for player in players_db:
-        if player['user_id'] == user_id:
-            return player
-    return None
-
-# ========== API ENDPOINTS ==========
 @app.route('/')
 def home():
-    return "🎮 NextLifeRP API - ONLINE | Use /register, /login, /validate"
+    return "🎮 NextLifeRP API with Discord Database - ONLINE"
 
 @app.route('/health', methods=['GET'])
 def health():
+    bot_status = "online" if bot.is_ready() else "offline"
     return jsonify({
         "status": "online",
-        "service": "nextliferp",
-        "users_count": len(users_db),
-        "timestamp": datetime.now().isoformat()
+        "discord_bot": bot_status,
+        "service": "nextliferp-discord-db"
     })
+
+# Helper function to check if channels are ready
+def check_channels():
+    if not players_channel or not sessions_channel or not data_channel:
+        return False, "Discord channels not ready yet"
+    return True, "OK"
 
 # ---------- REGISTER ----------
 @app.route('/register', methods=['POST'])
 def register():
     try:
-        # Get JSON data
+        # Check channels
+        ready, msg = check_channels()
+        if not ready:
+            return jsonify({"success": False, "error": f"Discord not ready: {msg}"})
+        
         data = request.get_json()
         if not data:
             return jsonify({"success": False, "error": "No data received"})
@@ -70,261 +94,236 @@ def register():
         email = data.get('email', '').strip()
         password = data.get('password', '').strip()
         
-        print(f"📝 Registration attempt: {username} | {email}")
+        print(f"📝 Registration: {username} | {email}")
         
         # Validation
         if len(username) < 3:
-            return jsonify({"success": False, "error": "Username must be at least 3 characters"})
-        
+            return jsonify({"success": False, "error": "Username too short"})
         if len(password) < 4:
-            return jsonify({"success": False, "error": "Password must be at least 4 characters"})
-        
+            return jsonify({"success": False, "error": "Password too short"})
         if '@' not in email:
-            return jsonify({"success": False, "error": "Invalid email format"})
+            return jsonify({"success": False, "error": "Invalid email"})
         
-        # Check if exists
-        if find_user_by_username(username):
-            return jsonify({"success": False, "error": "Username already taken"})
-        
-        if find_user_by_email(email):
-            return jsonify({"success": False, "error": "Email already registered"})
-        
-        # Create user
-        user_id = secrets.token_hex(8)
-        salt = secrets.token_hex(4)
-        password_hash = hashlib.sha256((password + salt).encode()).hexdigest()
-        
-        new_user = {
-            "user_id": user_id,
-            "username": username,
-            "email": email,
-            "password_hash": password_hash,
-            "salt": salt,
-            "created_at": datetime.now().isoformat()
-        }
-        users_db.append(new_user)
-        
-        # Create auth token
-        auth_token = secrets.token_hex(32)
-        new_session = {
-            "auth_token": auth_token,
-            "user_id": user_id,
-            "created_at": datetime.now().isoformat()
-        }
-        sessions_db.append(new_session)
-        
-        # Create player data
-        new_player = {
-            "user_id": user_id,
-            "username": username,
-            "level": 1,
-            "money": 1000,
-            "city": "Los Santos",
-            "created_at": datetime.now().isoformat(),
-            "last_login": datetime.now().isoformat()
-        }
-        players_db.append(new_player)
-        
-        print(f"✅ User registered: {username} (ID: {user_id})")
-        
-        return jsonify({
-            "success": True,
-            "message": "Account created successfully!",
-            "auth_token": auth_token,
-            "user_id": user_id,
-            "username": username,
-            "player_data": new_player
-        })
+        # Import async function
+        import asyncio
+        result = asyncio.run(register_user(username, email, password))
+        return jsonify(result)
         
     except Exception as e:
-        print(f"❌ Registration error: {e}")
-        return jsonify({"success": False, "error": "Server error"})
+        print(f"❌ Register error: {e}")
+        return jsonify({"success": False, "error": str(e)})
+
+async def register_user(username, email, password):
+    # Check if user exists in Discord
+    async for msg in players_channel.history(limit=200):
+        if msg.content:
+            try:
+                user = json.loads(msg.content)
+                if user.get('username') == username:
+                    return {"success": False, "error": "Username taken"}
+                if user.get('email') == email:
+                    return {"success": False, "error": "Email exists"}
+            except:
+                continue
+    
+    # Create user
+    user_id = secrets.token_hex(8)
+    salt = secrets.token_hex(4)
+    password_hash = hashlib.sha256((password + salt).encode()).hexdigest()
+    
+    user_data = {
+        "user_id": user_id,
+        "username": username,
+        "email": email,
+        "password_hash": password_hash,
+        "salt": salt,
+        "created_at": datetime.now().isoformat()
+    }
+    
+    # Save to Discord players-db channel
+    await players_channel.send(json.dumps(user_data))
+    print(f"✅ User saved to Discord: {username}")
+    
+    # Create auth token
+    auth_token = secrets.token_hex(32)
+    session_data = {
+        "auth_token": auth_token,
+        "user_id": user_id,
+        "created_at": datetime.now().isoformat()
+    }
+    await sessions_channel.send(json.dumps(session_data))
+    
+    # Create player game data
+    game_data = {
+        "user_id": user_id,
+        "username": username,
+        "level": 1,
+        "money": 1000,
+        "city": "Los Santos",
+        "created_at": datetime.now().isoformat()
+    }
+    await data_channel.send(json.dumps(game_data))
+    
+    return {
+        "success": True,
+        "message": "Account created!",
+        "auth_token": auth_token,
+        "user_id": user_id,
+        "username": username,
+        "player_data": game_data
+    }
 
 # ---------- LOGIN ----------
 @app.route('/login', methods=['POST'])
 def login():
     try:
+        ready, msg = check_channels()
+        if not ready:
+            return jsonify({"success": False, "error": f"Discord not ready: {msg}"})
+        
         data = request.get_json()
         if not data:
-            return jsonify({"success": False, "error": "No data received"})
+            return jsonify({"success": False, "error": "No data"})
         
         email = data.get('email', '').strip()
         password = data.get('password', '').strip()
         
-        print(f"🔑 Login attempt: {email}")
-        
-        # Find user
-        user = find_user_by_email(email)
-        if not user:
-            return jsonify({"success": False, "error": "Invalid email or password"})
-        
-        # Verify password
-        test_hash = hashlib.sha256((password + user['salt']).encode()).hexdigest()
-        if test_hash != user['password_hash']:
-            return jsonify({"success": False, "error": "Invalid email or password"})
-        
-        # Create new token
-        auth_token = secrets.token_hex(32)
-        new_session = {
-            "auth_token": auth_token,
-            "user_id": user['user_id'],
-            "created_at": datetime.now().isoformat()
-        }
-        sessions_db.append(new_session)
-        
-        # Update player last login
-        player = find_player_data(user['user_id'])
-        if player:
-            player['last_login'] = datetime.now().isoformat()
-        
-        print(f"✅ User logged in: {user['username']}")
-        
-        return jsonify({
-            "success": True,
-            "message": "Login successful!",
-            "auth_token": auth_token,
-            "user_id": user['user_id'],
-            "username": user['username'],
-            "player_data": player if player else {
-                "user_id": user['user_id'],
-                "username": user['username'],
-                "level": 1,
-                "money": 1000,
-                "city": "Los Santos"
-            }
-        })
+        import asyncio
+        result = asyncio.run(login_user(email, password))
+        return jsonify(result)
         
     except Exception as e:
-        print(f"❌ Login error: {e}")
-        return jsonify({"success": False, "error": "Server error"})
+        return jsonify({"success": False, "error": str(e)})
+
+async def login_user(email, password):
+    # Find user in Discord
+    async for msg in players_channel.history(limit=200):
+        if msg.content:
+            try:
+                user = json.loads(msg.content)
+                if user.get('email') == email:
+                    # Check password
+                    test_hash = hashlib.sha256((password + user['salt']).encode()).hexdigest()
+                    if test_hash == user['password_hash']:
+                        # Create new token
+                        auth_token = secrets.token_hex(32)
+                        session_data = {
+                            "auth_token": auth_token,
+                            "user_id": user['user_id'],
+                            "created_at": datetime.now().isoformat()
+                        }
+                        await sessions_channel.send(json.dumps(session_data))
+                        
+                        # Get player data
+                        player_data = await get_player_data_from_discord(user['user_id'])
+                        
+                        return {
+                            "success": True,
+                            "auth_token": auth_token,
+                            "user_id": user['user_id'],
+                            "username": user['username'],
+                            "player_data": player_data
+                        }
+            except:
+                continue
+    
+    return {"success": False, "error": "Invalid email or password"}
+
+async def get_player_data_from_discord(user_id):
+    # Find player data in Discord
+    async for msg in data_channel.history(limit=200):
+        if msg.content:
+            try:
+                data = json.loads(msg.content)
+                if data.get('user_id') == user_id:
+                    return data
+            except:
+                continue
+    
+    # Return default if not found
+    return {
+        "user_id": user_id,
+        "level": 1,
+        "money": 1000,
+        "city": "Los Santos"
+    }
 
 # ---------- VALIDATE TOKEN ----------
 @app.route('/validate', methods=['POST'])
 def validate():
     try:
+        ready, msg = check_channels()
+        if not ready:
+            return jsonify({"success": False, "error": f"Discord not ready: {msg}"})
+        
         data = request.get_json()
         if not data:
-            return jsonify({"success": False, "error": "No data received"})
+            return jsonify({"success": False, "error": "No data"})
         
-        auth_token = data.get('auth_token', '').strip()
+        token = data.get('auth_token', '')
         
-        # Find session
-        session = find_session_by_token(auth_token)
-        if not session:
-            return jsonify({"success": True, "valid": False, "message": "Invalid token"})
-        
-        # Find user
-        user = find_user_by_id(session['user_id'])
-        if not user:
-            return jsonify({"success": True, "valid": False, "message": "User not found"})
-        
-        # Get player data
-        player = find_player_data(user['user_id'])
-        
-        return jsonify({
-            "success": True,
-            "valid": True,
-            "message": "Token is valid",
-            "user_id": user['user_id'],
-            "username": user['username'],
-            "player_data": player if player else {}
-        })
+        import asyncio
+        result = asyncio.run(validate_token_async(token))
+        return jsonify(result)
         
     except Exception as e:
-        return jsonify({"success": False, "error": "Server error"})
+        return jsonify({"success": False, "error": str(e)})
+
+async def validate_token_async(token):
+    # Check sessions in Discord
+    async for msg in sessions_channel.history(limit=200):
+        if msg.content:
+            try:
+                session = json.loads(msg.content)
+                if session.get('auth_token') == token:
+                    # Get user
+                    async for user_msg in players_channel.history(limit=200):
+                        if user_msg.content:
+                            user = json.loads(user_msg.content)
+                            if user.get('user_id') == session.get('user_id'):
+                                return {
+                                    "success": True,
+                                    "valid": True,
+                                    "username": user['username'],
+                                    "user_id": user['user_id']
+                                }
+            except:
+                continue
+    
+    return {"success": True, "valid": False}
 
 # ---------- GET PLAYER DATA ----------
 @app.route('/player_data', methods=['POST'])
-def get_player_data():
+def player_data():
     try:
+        ready, msg = check_channels()
+        if not ready:
+            return jsonify({"success": False, "error": f"Discord not ready: {msg}"})
+        
         data = request.get_json()
         if not data:
-            return jsonify({"success": False, "error": "No data received"})
+            return jsonify({"success": False, "error": "No data"})
         
-        user_id = data.get('user_id', '').strip()
-        auth_token = data.get('auth_token', '').strip()
+        user_id = data.get('user_id', '')
         
-        # Validate token if provided
-        if auth_token:
-            session = find_session_by_token(auth_token)
-            if not session or session['user_id'] != user_id:
-                return jsonify({"success": False, "error": "Unauthorized"})
-        
-        # Find player data
-        player = find_player_data(user_id)
-        if not player:
-            return jsonify({"success": False, "error": "Player data not found"})
-        
-        return jsonify({
-            "success": True,
-            "player_data": player
-        })
+        import asyncio
+        result = asyncio.run(get_player_data_from_discord(user_id))
+        return jsonify({"success": True, "player_data": result})
         
     except Exception as e:
-        return jsonify({"success": False, "error": "Server error"})
+        return jsonify({"success": False, "error": str(e)})
 
-# ---------- UPDATE PLAYER DATA ----------
-@app.route('/update_player', methods=['POST'])
-def update_player():
-    try:
-        data = request.get_json()
-        if not data:
-            return jsonify({"success": False, "error": "No data received"})
-        
-        user_id = data.get('user_id', '').strip()
-        auth_token = data.get('auth_token', '').strip()
-        updates = data.get('updates', {})
-        
-        # Validate token
-        session = find_session_by_token(auth_token)
-        if not session or session['user_id'] != user_id:
-            return jsonify({"success": False, "error": "Unauthorized"})
-        
-        # Find player
-        player = find_player_data(user_id)
-        if not player:
-            return jsonify({"success": False, "error": "Player not found"})
-        
-        # Update fields
-        for key, value in updates.items():
-            if key in ['level', 'money', 'city', 'last_login']:
-                player[key] = value
-        
-        return jsonify({
-            "success": True,
-            "message": "Player data updated",
-            "player_data": player
-        })
-        
-    except Exception as e:
-        return jsonify({"success": False, "error": "Server error"})
+# ========== START BOTH SERVICES ==========
+def run_flask():
+    print("🚀 Starting Flask API on port 10000...")
+    app.run(host='0.0.0.0', port=10000, debug=False, threaded=True)
 
-# ---------- GET ALL DATA (DEBUG) ----------
-@app.route('/debug', methods=['GET'])
-def debug():
-    return jsonify({
-        "users": users_db,
-        "sessions": sessions_db,
-        "players": players_db,
-        "counts": {
-            "users": len(users_db),
-            "sessions": len(sessions_db),
-            "players": len(players_db)
-        }
-    })
+# Start Flask in thread
+flask_thread = Thread(target=run_flask)
+flask_thread.daemon = True
+flask_thread.start()
 
-# ========== RUN SERVER ==========
-if __name__ == '__main__':
-    print("🚀 Starting NextLifeRP API Server...")
-    print("📡 Endpoints:")
-    print("  POST /register  - Create account")
-    print("  POST /login     - Login user")
-    print("  POST /validate  - Validate token")
-    print("  POST /player_data - Get player data")
-    print("  GET  /health    - Check server health")
-    print("  GET  /debug     - View all data (debug)")
-    print("=" * 50)
-    
-    # Run server
-    port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+# Start Discord bot
+print("🤖 Starting Discord Bot...")
+print(f"Using token: {DISCORD_TOKEN[:10]}...")
+bot.run(DISCORD_TOKEN)
