@@ -1,4 +1,1 @@
 Flask==2.3.3
-gunicorn
-discord.py
-python-dotenv
