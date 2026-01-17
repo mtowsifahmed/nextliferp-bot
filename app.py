@@ -1,41 +1,16 @@
-import os
 from flask import Flask, request, jsonify
 import json
 import hashlib
 import secrets
 from datetime import datetime
-import discord
-from discord.ext import commands
-import threading
-import asyncio
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
+import os
 
 app = Flask(__name__)
 
-# ========== SIMPLE DATABASE (IN-MEMORY) ==========
+# ========== SIMPLE IN-MEMORY DATABASE ==========
 users_db = []          # Store user accounts
 sessions_db = []       # Store login sessions
 players_db = []        # Store player game data
-
-# ========== DISCORD BOT SETUP ==========
-TOKEN = os.getenv('DISCORD_TOKEN', 'placeholder_token')
-intents = discord.Intents.default()
-bot = commands.Bot(command_prefix="!", intents=intents)
-
-@bot.event
-async def on_ready():
-    print(f"🤖 Discord Bot is Online as {bot.user}")
-
-def run_discord_bot():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    if TOKEN and TOKEN != 'placeholder_token':
-        bot.run(TOKEN)
-    else:
-        print("⚠️ Discord bot not starting: No token provided in environment variables")
 
 # ========== HELPER FUNCTIONS ==========
 def find_user_by_email(email):
@@ -86,6 +61,7 @@ def health():
 @app.route('/register', methods=['POST'])
 def register():
     try:
+        # Get JSON data
         data = request.get_json()
         if not data:
             return jsonify({"success": False, "error": "No data received"})
@@ -96,6 +72,7 @@ def register():
         
         print(f"📝 Registration attempt: {username} | {email}")
         
+        # Validation
         if len(username) < 3:
             return jsonify({"success": False, "error": "Username must be at least 3 characters"})
         
@@ -105,12 +82,14 @@ def register():
         if '@' not in email:
             return jsonify({"success": False, "error": "Invalid email format"})
         
+        # Check if exists
         if find_user_by_username(username):
             return jsonify({"success": False, "error": "Username already taken"})
         
         if find_user_by_email(email):
             return jsonify({"success": False, "error": "Email already registered"})
         
+        # Create user
         user_id = secrets.token_hex(8)
         salt = secrets.token_hex(4)
         password_hash = hashlib.sha256((password + salt).encode()).hexdigest()
@@ -125,6 +104,7 @@ def register():
         }
         users_db.append(new_user)
         
+        # Create auth token
         auth_token = secrets.token_hex(32)
         new_session = {
             "auth_token": auth_token,
@@ -133,6 +113,7 @@ def register():
         }
         sessions_db.append(new_session)
         
+        # Create player data
         new_player = {
             "user_id": user_id,
             "username": username,
@@ -157,7 +138,7 @@ def register():
         
     except Exception as e:
         print(f"❌ Registration error: {e}")
-        return jsonify({"success": False, "error": "Server error: " + str(e)})
+        return jsonify({"success": False, "error": "Server error"})
 
 # ---------- LOGIN ----------
 @app.route('/login', methods=['POST'])
@@ -172,14 +153,17 @@ def login():
         
         print(f"🔑 Login attempt: {email}")
         
+        # Find user
         user = find_user_by_email(email)
         if not user:
             return jsonify({"success": False, "error": "Invalid email or password"})
         
+        # Verify password
         test_hash = hashlib.sha256((password + user['salt']).encode()).hexdigest()
         if test_hash != user['password_hash']:
             return jsonify({"success": False, "error": "Invalid email or password"})
         
+        # Create new token
         auth_token = secrets.token_hex(32)
         new_session = {
             "auth_token": auth_token,
@@ -188,6 +172,7 @@ def login():
         }
         sessions_db.append(new_session)
         
+        # Update player last login
         player = find_player_data(user['user_id'])
         if player:
             player['last_login'] = datetime.now().isoformat()
@@ -211,7 +196,7 @@ def login():
         
     except Exception as e:
         print(f"❌ Login error: {e}")
-        return jsonify({"success": False, "error": "Server error: " + str(e)})
+        return jsonify({"success": False, "error": "Server error"})
 
 # ---------- VALIDATE TOKEN ----------
 @app.route('/validate', methods=['POST'])
@@ -223,14 +208,17 @@ def validate():
         
         auth_token = data.get('auth_token', '').strip()
         
+        # Find session
         session = find_session_by_token(auth_token)
         if not session:
             return jsonify({"success": True, "valid": False, "message": "Invalid token"})
         
+        # Find user
         user = find_user_by_id(session['user_id'])
         if not user:
             return jsonify({"success": True, "valid": False, "message": "User not found"})
         
+        # Get player data
         player = find_player_data(user['user_id'])
         
         return jsonify({
@@ -243,7 +231,7 @@ def validate():
         })
         
     except Exception as e:
-        return jsonify({"success": False, "error": "Server error: " + str(e)})
+        return jsonify({"success": False, "error": "Server error"})
 
 # ---------- GET PLAYER DATA ----------
 @app.route('/player_data', methods=['POST'])
@@ -256,11 +244,13 @@ def get_player_data():
         user_id = data.get('user_id', '').strip()
         auth_token = data.get('auth_token', '').strip()
         
+        # Validate token if provided
         if auth_token:
             session = find_session_by_token(auth_token)
             if not session or session['user_id'] != user_id:
                 return jsonify({"success": False, "error": "Unauthorized"})
         
+        # Find player data
         player = find_player_data(user_id)
         if not player:
             return jsonify({"success": False, "error": "Player data not found"})
@@ -271,7 +261,7 @@ def get_player_data():
         })
         
     except Exception as e:
-        return jsonify({"success": False, "error": "Server error: " + str(e)})
+        return jsonify({"success": False, "error": "Server error"})
 
 # ---------- UPDATE PLAYER DATA ----------
 @app.route('/update_player', methods=['POST'])
@@ -285,14 +275,17 @@ def update_player():
         auth_token = data.get('auth_token', '').strip()
         updates = data.get('updates', {})
         
+        # Validate token
         session = find_session_by_token(auth_token)
         if not session or session['user_id'] != user_id:
             return jsonify({"success": False, "error": "Unauthorized"})
         
+        # Find player
         player = find_player_data(user_id)
         if not player:
             return jsonify({"success": False, "error": "Player not found"})
         
+        # Update fields
         for key, value in updates.items():
             if key in ['level', 'money', 'city', 'last_login']:
                 player[key] = value
@@ -304,7 +297,7 @@ def update_player():
         })
         
     except Exception as e:
-        return jsonify({"success": False, "error": "Server error: " + str(e)})
+        return jsonify({"success": False, "error": "Server error"})
 
 # ---------- GET ALL DATA (DEBUG) ----------
 @app.route('/debug', methods=['GET'])
@@ -332,11 +325,6 @@ if __name__ == '__main__':
     print("  GET  /debug     - View all data (debug)")
     print("=" * 50)
     
-    # Start Discord Bot in a separate thread
-    discord_thread = threading.Thread(target=run_discord_bot)
-    discord_thread.daemon = True
-    discord_thread.start()
-    
-    # Run Flask server
+    # Run server
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port, debug=False)
