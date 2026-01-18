@@ -14,7 +14,7 @@ intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # Your Discord bot token
-DISCORD_TOKEN = os.environ.get('DISCORD_TOKEN', 'MTQyNzI4MTQ2OTg0NzUwMjg1OA.GvZNY0.Euoe6oB45R9w4-BXJRI23-ZjU7f3CtfsP8S5RY')
+DISCORD_TOKEN = os.environ.get('DISCORD_TOKEN')
 
 # Channel storage
 players_channel = None
